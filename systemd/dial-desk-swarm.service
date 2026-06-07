@@ -1,0 +1,15 @@
+[Unit]
+Description=Dial Desk Executive Swarm
+After=network.target
+
+[Service]
+Type=simple
+User=claw
+WorkingDirectory=/opt/dial-desk-swarm
+Environment=PATH=/opt/dial-desk-swarm/.venv/bin
+ExecStart=/opt/dial-desk-swarm/.venv/bin/python server.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
