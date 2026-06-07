@@ -14,7 +14,7 @@ apply_file_attachment_reference_patch()
 apply_ipython_composio_context_patch()
 
 _tracing_key = os.getenv("OPENAI_API_KEY")
-if _tracing_key:
+if _tracing_key and _tracing_key.startswith("sk-"):
     set_tracing_export_api_key(_tracing_key)
 else:
     set_tracing_disabled(True)
@@ -30,6 +30,7 @@ def create_agency(load_threads_callback=None):
     from agents.cto import create_cto
     from agents.coo import create_coo
     from agents.sales_director import create_sales_director
+    from agents.builder import create_builder
 
     from agents.virtual_assistant import create_virtual_assistant
     from agents.deep_research import create_deep_research
@@ -45,6 +46,7 @@ def create_agency(load_threads_callback=None):
     cto = create_cto()
     coo = create_coo()
     sales_director = create_sales_director()
+    builder = create_builder()
 
     virtual_assistant = create_virtual_assistant()
     deep_research = create_deep_research()
@@ -54,7 +56,7 @@ def create_agency(load_threads_callback=None):
     video_generation_agent = create_video_generation_agent()
     image_generation_agent = create_image_generation_agent()
 
-    executives = [ceo, cmo, cto, coo, sales_director]
+    executives = [ceo, cmo, cto, coo, sales_director, builder]
     specialists = [
         virtual_assistant,
         deep_research,

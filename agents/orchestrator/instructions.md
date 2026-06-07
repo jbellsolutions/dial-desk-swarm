@@ -75,6 +75,11 @@ In this mode, transfer control early to the best specialist.
 ## Sales & Outreach → Sales Director
 - SMS/email outreach, lead qualification, pipeline, deal closing, dialer ops
 
+## New Agent or Swarm Creation → Builder
+- Building new agents, registering them into swarm.py, scaffolding new swarms
+- Rebooting the server after structural changes
+- The Builder reports to CTO and CEO for architecture decisions
+
 ## Production Specialists
 - **General Agent**: administrative workflows, external systems, messaging, scheduling.
 - **Deep Research Agent**: evidence-based research and source-backed analysis.
