@@ -1,0 +1,21 @@
+[Unit]
+Description=DialDesk Browser/Super-Browser Operator
+After=network.target dial-desk-swarm.service
+Wants=dial-desk-swarm.service
+
+[Service]
+Type=simple
+User=claw
+WorkingDirectory=/opt/dial-desk-swarm
+Environment=PATH=/opt/dial-desk-swarm/.venv/bin
+EnvironmentFile=-/opt/dial-desk-swarm/.env
+Environment=DIALDESK_API_BASE_URL=http://127.0.0.1:8080
+Environment=DIALDESK_BROWSER_OPERATOR_ID=super-browser-vps
+Environment=DIALDESK_BROWSER_MODE=auto
+Environment=DIALDESK_BROWSER_ARTIFACT_DIR=/opt/dial-desk-swarm/data/browser-artifacts
+ExecStart=/opt/dial-desk-swarm/.venv/bin/python -m src.browser_operator
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

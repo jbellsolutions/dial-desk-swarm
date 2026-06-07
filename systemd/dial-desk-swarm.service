@@ -1,5 +1,5 @@
 [Unit]
-Description=Dial Desk Executive Swarm
+Description=DialDesk Autonomous Business Runtime
 After=network.target
 
 [Service]
@@ -7,8 +7,13 @@ Type=simple
 User=claw
 WorkingDirectory=/opt/dial-desk-swarm
 Environment=PATH=/opt/dial-desk-swarm/.venv/bin
-ExecStart=/opt/dial-desk-swarm/.venv/bin/python server.py
-Restart=on-failure
+EnvironmentFile=-/opt/dial-desk-swarm/.env
+Environment=PORT=8080
+Environment=DIALDESK_DB=/opt/dial-desk-swarm/data/dialdesk.sqlite3
+Environment=DIALDESK_BACKUP_DIR=/opt/dial-desk-swarm/data/backups
+Environment=DIALDESK_BROWSER_ARTIFACT_DIR=/opt/dial-desk-swarm/data/browser-artifacts
+ExecStart=/opt/dial-desk-swarm/.venv/bin/python -m uvicorn src.coordinator.main:app --host 0.0.0.0 --port 8080 --http h11
+Restart=always
 RestartSec=10
 
 [Install]
