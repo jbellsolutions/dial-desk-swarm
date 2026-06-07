@@ -1,0 +1,18 @@
+component: runtime.smartlead
+type: specialist-runtime
+description: "Smartlead cold-email channel with per-SDR pinned inboxes. Each SDR owns one or more inboxes that aren't shared with other campaigns so inbound replies route cleanly back to that SDR's runtime."
+depends_on:
+  agent-os.orchestrator: ">=0.1"
+agents:
+  - sdr
+data_sources:
+  - smartlead.campaigns
+  - smartlead.inboxes
+outputs:
+  - type: vault_run_artifact
+    consumer: vault.runs
+  - type: nats_event
+    subject: "agents.sdr.email.*"
+env_vars:
+  - SMARTLEAD_API_KEY
+  - SMARTLEAD_BASE_URL    # default https://server.smartlead.ai/api/v1

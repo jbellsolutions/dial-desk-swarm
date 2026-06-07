@@ -1,0 +1,292 @@
+"""A2A HTTP server — the three routes every A2A-compliant agent must expose.
+
+  GET  /agentCard         → Agent Card JSON
+  POST /messages          → receive an inbound task delegation
+  GET  /tasks/{task_id}   → poll task status
+
+Task lifecycle: SUBMITTED → WORKING → COMPLETED | FAILED | CANCELLED
+
+The server runs alongside Hermes as a FastAPI sub-application. It wires into
+the existing orchestration stack:
+  - Tier classifier gates every inbound delegation
+  - Plan card content flows into the task response body
+  - NATS publisher emits task.started / task.completed events
+
+Run standalone for testing:
+    uvicorn agent_os.a2a.server:app --port 8080 --reload
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Task store — in-memory for now; swap for Redis/SQLite for multi-instance
+# ---------------------------------------------------------------------------
+
+# Hard cap on retained tasks. Python dicts are insertion-ordered, so when we
+# exceed the cap we evict the oldest. Override via A2A_MAX_TASKS env var.
+_MAX_TASKS = int(os.getenv("A2A_MAX_TASKS", "1000"))
+_tasks: dict[str, "A2ATask"] = {}
+
+
+def _store_task(task: "A2ATask") -> None:
+    """Insert a task and evict the oldest if we'd exceed _MAX_TASKS."""
+    _tasks[task.task_id] = task
+    while len(_tasks) > _MAX_TASKS:
+        # Pop oldest by insertion order
+        oldest_id = next(iter(_tasks))
+        _tasks.pop(oldest_id, None)
+
+
+class TaskStatus(str, Enum):
+    SUBMITTED = "submitted"
+    WORKING = "working"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class A2ATask:
+    def __init__(self, task_id: str, message: dict[str, Any]) -> None:
+        self.task_id = task_id
+        self.message = message
+        self.status = TaskStatus.SUBMITTED
+        self.created_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = self.created_at
+        self.result: dict[str, Any] | None = None
+        self.artifacts: list[dict[str, Any]] = []
+        self.plan_card: str | None = None  # rendered markdown plan card
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.task_id,
+            "status": {"state": self.status.value},
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+            "message": self.message,
+            "planCard": self.plan_card,
+            "artifacts": self.artifacts,
+            "result": self.result,
+        }
+
+    def set_status(self, status: TaskStatus, result: dict[str, Any] | None = None) -> None:
+        self.status = status
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+        if result:
+            self.result = result
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app factory
+# ---------------------------------------------------------------------------
+
+def create_a2a_app(agent_id: str | None = None, base_url: str | None = None):  # type: ignore[return]
+    """Return a FastAPI app with the three A2A routes wired up.
+
+    Import lazily so the rest of agent_os works without fastapi installed.
+    """
+    try:
+        from fastapi import FastAPI, HTTPException, Request
+        from fastapi.responses import JSONResponse
+    except ImportError:
+        logger.error("fastapi not installed — A2A server unavailable. Run: uv add fastapi uvicorn")
+        return None
+
+    from agent_os.a2a.agent_card import build_card
+    from agent_os.bus.nats_publisher import publish_event
+
+    _agent_id = agent_id or os.getenv("HERMES_AGENT_ID", "admiral")
+    _card = build_card(agent_id=_agent_id, base_url=base_url)
+
+    # Spawn the Telegram bot + AgentOps init when the app starts.
+    # Role gate: only the Admiral runs human-channel listeners. Spawned
+    # superagents/specialists run as 'worker' so they never compete on
+    # the same TELEGRAM_BOT_TOKEN long-poll (Telegram allows one).
+    _role = os.getenv("HERMES_ROLE", "admiral").lower()
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _lifespan(_app):
+        # Observability — auto-instrument LLM calls when AGENTOPS_API_KEY is set
+        try:
+            from agent_os.observability.agentops.client import init_agentops
+            init_agentops(agent_id=_agent_id, tags=[_role, "a2a-server"])
+        except Exception as exc:
+            logger.debug("AgentOps init skipped: %s", exc)
+
+        background_tasks: list[asyncio.Task] = []
+        if _role == "admiral":
+            # Telegram bot + NATS alert forwarder. Both no-op cleanly when
+            # their dependencies aren't configured (TELEGRAM_BOT_TOKEN, NATS_URL).
+            try:
+                from agent_os.channels.telegram.bot import run_alert_forwarder, run_bot
+                background_tasks.append(asyncio.create_task(run_bot()))
+                background_tasks.append(asyncio.create_task(run_alert_forwarder()))
+                logger.info("Telegram bot + alert forwarder spawned (role=admiral)")
+            except Exception as exc:
+                logger.warning("Background tasks did not start: %s", exc)
+        else:
+            logger.info("HERMES_ROLE=%s — Telegram bot/alert forwarder NOT started", _role)
+
+        try:
+            yield
+        finally:
+            for t in background_tasks:
+                t.cancel()
+
+    app = FastAPI(title=f"A2A — {_agent_id}", version="1.0.0", lifespan=_lifespan)
+
+    # ------------------------------------------------------------------
+    # GET /agentCard
+    # ------------------------------------------------------------------
+
+    @app.get("/agentCard")
+    async def get_agent_card() -> JSONResponse:
+        return JSONResponse(_card.to_dict())
+
+    # ------------------------------------------------------------------
+    # POST /messages  — receive inbound task delegation
+    # ------------------------------------------------------------------
+
+    @app.post("/messages")
+    async def receive_message(request: Request) -> JSONResponse:
+        body = await request.json()
+
+        # A2A spec: message has a "parts" list with text content
+        parts = body.get("parts", [])
+        text_parts = [p.get("text", "") for p in parts if p.get("kind") == "text"]
+        prompt = " ".join(text_parts).strip() or body.get("text", "")
+
+        task_id = body.get("taskId") or str(uuid.uuid4())
+        task = A2ATask(task_id=task_id, message=body)
+        _store_task(task)
+
+        # Emit NATS event
+        publish_event(f"agents.{_agent_id}.task.started", {
+            "task_id": task_id,
+            "prompt": prompt[:200],
+            "source": "a2a",
+        })
+
+        # Dispatch asynchronously via orchestration stack
+        asyncio.create_task(_dispatch_task(task, prompt, _agent_id))
+
+        return JSONResponse({"taskId": task_id, "status": "submitted"}, status_code=202)
+
+    # ------------------------------------------------------------------
+    # GET /tasks/{task_id}
+    # ------------------------------------------------------------------
+
+    @app.get("/tasks/{task_id}")
+    async def get_task(task_id: str) -> JSONResponse:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return JSONResponse(task.to_dict())
+
+    # ------------------------------------------------------------------
+    # Health (Railway healthcheck target)
+    # ------------------------------------------------------------------
+
+    @app.get("/health")
+    async def health() -> JSONResponse:
+        return JSONResponse({"status": "ok", "agent": _agent_id})
+
+    return app
+
+
+# ---------------------------------------------------------------------------
+# Task dispatcher — wires into the Phase F orchestration stack
+# ---------------------------------------------------------------------------
+
+async def _dispatch_task(task: A2ATask, prompt: str, agent_id: str) -> None:
+    """Run the orchestration pipeline for an inbound A2A task."""
+    from agent_os.bus.nats_publisher import publish_event
+
+    task.set_status(TaskStatus.WORKING)
+
+    try:
+        # Build a Job and run through the Phase F planner stack
+        from agent_os.orchestrator.adapters.job_router import Job, dispatch
+        from agent_os.orchestrator.tool_planner import plan
+        from agent_os.orchestrator.plan_card import render_markdown
+
+        meta = dict(task.message.get("metadata", {}) or {})
+        tag_str = meta.pop("tags", "") if isinstance(meta.get("tags"), str) else ""
+        tags = {t.strip() for t in tag_str.split(",") if t.strip()}
+
+        # Stringify any non-string metadata values — Job.metadata is dict[str, str].
+        clean_meta: dict[str, str] = {}
+        for k, v in meta.items():
+            if v is None:
+                continue
+            clean_meta[str(k)] = v if isinstance(v, str) else str(v)
+
+        job = Job(prompt=prompt, tags=tags, metadata=clean_meta)
+        tool_plan = plan(job)
+        plan_card_md = render_markdown(tool_plan)
+
+        task.plan_card = plan_card_md
+        task.artifacts.append({
+            "type": "text/markdown",
+            "content": plan_card_md,
+            "title": "Plan Card",
+        })
+
+        # Tier 3 hard-stop: don't execute without explicit confirmation upstream.
+        # Tier 3 confirmations come through the channel adapter (Telegram), not /messages.
+        if tool_plan.tier >= 3 or tool_plan.blocked_reason:
+            task.set_status(TaskStatus.SUBMITTED, result={
+                "planCard": plan_card_md,
+                "tier": tool_plan.tier,
+                "blocked_reason": tool_plan.blocked_reason,
+                "needs_confirmation": True,
+                "primary_tool": tool_plan.primary_tool,
+                "model": tool_plan.model_recommendation,
+            })
+            publish_event(f"agents.{agent_id}.task.needs_human", {
+                "task_id": task.task_id,
+                "tier": tool_plan.tier,
+                "primary_tool": tool_plan.primary_tool,
+            })
+            return
+
+        # Dispatch through the orchestrator — honors plan.primary_tool / model.
+        result = await dispatch(job, plan=tool_plan)
+
+        task.set_status(TaskStatus.COMPLETED, result={
+            "runtime": tool_plan.primary_tool,
+            "planCard": plan_card_md,
+            "tier": tool_plan.tier,
+            "model": tool_plan.model_recommendation,
+            "output": result,
+        })
+
+        publish_event(f"agents.{agent_id}.task.completed", {
+            "task_id": task.task_id,
+            "runtime": tool_plan.primary_tool,
+            "tier": tool_plan.tier,
+        })
+
+    except Exception as exc:
+        logger.exception("A2A task dispatch failed for %s", task.task_id)
+        task.set_status(TaskStatus.FAILED, result={"error": str(exc)})
+        publish_event(f"agents.{agent_id}.task.failed", {
+            "task_id": task.task_id,
+            "error": str(exc),
+        })
+
+
+# ---------------------------------------------------------------------------
+# Standalone entrypoint for development
+# ---------------------------------------------------------------------------
+
+app = create_a2a_app()
