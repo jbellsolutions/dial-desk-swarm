@@ -596,7 +596,7 @@ sleep {self.wait_seconds}
 kill {' '.join(str(p) for p in pids)} 2>/dev/null
 sleep 1
 cd {root}
-nohup python server.py > /tmp/swarm_{self.wait_seconds}.log 2>&1 &
+nohup {sys.executable} server.py > /tmp/swarm_{self.wait_seconds}.log 2>&1 &
 """
         script_path = Path("/tmp") / f"restart_swarm_{self.wait_seconds}.sh"
         script_path.write_text(script)
