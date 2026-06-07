@@ -1,0 +1,26 @@
+component: runtime.sendivo
+type: specialist-runtime
+description: "Outbound SMS via Sendivo (sendivo-pp-cli subprocess with --agent JSON output). Send-only — Sendivo does not currently expose inbound webhooks via the CLI, so reply tracking is via periodic get-logs polls."
+depends_on:
+  agent-os.orchestrator: ">=0.1"
+agents:
+  - sdr
+data_sources:
+  - sendivo.brands
+  - sendivo.campaigns
+  - sendivo.phone_numbers
+outputs:
+  - type: vault_run_artifact
+    consumer: vault.runs
+  - type: nats_event
+    subject: "agents.sdr.sms.*"
+env_vars:
+  - SENDIVO_BEARER_AUTH         # sdk_xxx token from Sendivo dashboard
+  - SENDIVO_CLI_PATH            # default: sendivo-pp-cli (must be on PATH)
+
+notes: |
+  The bundled CLI ships only as a macOS arm64 binary
+  (sendivo-pp-mcp-darwin-arm64.mcpb at ~/printing-press/library/sendivo/build/).
+  For Linux VPS deployment via the tier-2 spawner, a Linux build of
+  sendivo-pp-cli is required. Until then, this runtime works only in local
+  dev on macOS or returns dev stubs when the binary is absent.

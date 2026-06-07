@@ -1,0 +1,21 @@
+component: runtime.prospect_intel
+type: specialist-runtime
+description: "ICP scoring (100-pt rubric) and enrichment (Apollo / Apify / Exa). Scores every imported lead and tags with tier (1/2/3) so SDRs can apply the right channel mix."
+depends_on:
+  agent-os.orchestrator: ">=0.1"
+agents:
+  - sdr
+  - sales-director
+data_sources:
+  - apollo
+  - apify
+  - exa
+outputs:
+  - type: vault_run_artifact
+    consumer: vault.runs
+  - type: nats_event
+    subject: "agents.prospect_intel.*"
+env_vars:
+  - APOLLO_API_KEY
+  - APIFY_TOKEN
+  - EXA_API_KEY

@@ -1,0 +1,72 @@
+name: dental_clinics_q3
+description: |
+  Outbound to dental clinics in TX/FL with 5-25 chairs. Pitch: AI receptionist
+  that books appointments after hours and handles insurance pre-auth.
+
+# List source — drop a CSV here and prospect_intel will ingest it.
+list_source:
+  type: csv
+  path: vault/lists/inbound/dental_clinics_q3.csv
+  required_columns:
+    - email
+    - first_name
+    - company
+    - phone
+    - title
+    - industry
+
+# ICP rubric override — adjust weights from the defaults in
+# runtimes/prospect_intel/scoring.py for this specific campaign.
+icp_weights:
+  industry: 25      # bumped — dental specifically matters more here
+  revenue: 10       # less weight — small clinics
+  headcount: 10
+  tech_stack: 5     # mostly irrelevant for dental
+  title: 30         # office manager / owner is the target
+  funding: 20       # recently expanded clinics convert better
+
+# Tier overrides — defaults are A=80+, B=50-79, C=<50. Tighten for hot lists.
+tier_thresholds:
+  A: 75
+  B: 45
+
+# Channel mix per tier (the SDR runtime enforces this)
+channel_mix:
+  A:
+    sequence:
+      - {channel: email, delay_minutes: 0}
+      - {channel: call, delay_minutes: 30}
+      - {channel: sms, delay_minutes: 60}
+  B:
+    sequence:
+      - {channel: email, delay_days: 0}
+      - {channel: call, delay_days: 1}
+      - {channel: sms, delay_days: 3}
+  C:
+    sequence:
+      - {channel: email, delay_days: 2}
+      - {channel: email, delay_days: 5}     # second touch only
+      # No calls or SMS for tier C unless they engage
+
+# Fleet assignment — which SDRs work this campaign. If multiple, prospect_intel
+# round-robins by tier so each SDR gets a balanced mix.
+assigned_sdrs:
+  - alex
+  - jordan
+
+# Quota override — campaign-specific daily targets per assigned SDR.
+quota:
+  daily_calls: 60
+  daily_emails: 100
+  daily_sms: 30
+
+# Smartlead campaign IDs (one per assigned SDR — created in Smartlead UI
+# first, IDs pasted here). Required so the SDR runtime can queue leads
+# into the right campaign with the right inbox.
+smartlead_campaigns:
+  alex: "${SMARTLEAD_CAMPAIGN_DENTAL_ALEX}"
+  jordan: "${SMARTLEAD_CAMPAIGN_DENTAL_JORDAN}"
+
+# Budget cap — Hermes pauses the campaign and pings #sales-director if cost
+# exceeds this in a 24h window.
+daily_budget_usd: 50
