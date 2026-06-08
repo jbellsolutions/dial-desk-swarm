@@ -18,5 +18,5 @@ COPY . .
 # Expose API port
 EXPOSE 8080
 
-# Run
-CMD ["python", "server.py"]
+# Run the API by default; Railway worker services can set DIALDESK_PROCESS=browser.
+CMD ["sh", "-c", "if [ \"$DIALDESK_PROCESS\" = \"browser\" ]; then python -m src.browser_operator; else python -m uvicorn src.coordinator.main:app --host 0.0.0.0 --port ${PORT:-8080} --http h11; fi"]

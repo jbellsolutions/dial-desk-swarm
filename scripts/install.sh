@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== Dial Desk Executive Swarm Installer ==="
+echo "=== DialDesk Autonomous Business Runtime Installer ==="
 
 # Check Python
 if ! command -v python3 &> /dev/null; then
@@ -19,6 +19,9 @@ echo "Installing dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
+echo "Creating persistent runtime directories..."
+mkdir -p data/backups data/browser-artifacts uploads
+
 # Create .env if missing
 if [ ! -f .env ]; then
     echo "Creating .env from template..."
@@ -28,4 +31,13 @@ fi
 
 echo "Installation complete. To start:"
 echo "  source .venv/bin/activate"
-echo "  python server.py"
+echo "  python -m uvicorn src.coordinator.main:app --host 0.0.0.0 --port 8080 --http h11"
+echo ""
+echo "For a VPS 24/7 install of both services:"
+echo "  APP_DIR=/opt/dial-desk-swarm SERVICE_USER=\$(id -un) bash scripts/vps_bootstrap.sh"
+echo ""
+echo "To run the browser/super-browser operator in another shell:"
+echo "  python -m src.browser_operator"
+echo ""
+echo "Optional rendered browser support:"
+echo "  pip install playwright && playwright install chromium"

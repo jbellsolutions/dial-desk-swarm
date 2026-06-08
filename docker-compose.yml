@@ -10,10 +10,30 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./agents:/app/agents
+      - ./data:/app/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/open-swarm/get_metadata"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  browser-operator:
+    build: .
+    profiles:
+      - browser
+    env_file:
+      - .env
+    environment:
+      DIALDESK_API_BASE_URL: http://swarm:8080
+      DIALDESK_BROWSER_OPERATOR_ID: super-browser-compose
+      DIALDESK_BROWSER_MODE: auto
+      DIALDESK_BROWSER_ARTIFACT_DIR: /app/data/browser-artifacts
+    volumes:
+      - ./data:/app/data
+    command: ["python", "-m", "src.browser_operator"]
+    depends_on:
+      swarm:
+        condition: service_healthy
+    restart: unless-stopped
